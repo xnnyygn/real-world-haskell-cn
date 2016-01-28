@@ -103,7 +103,7 @@ Haskell提供了一个特殊的Monad，叫做 ``ST``  *（State Transformer）* 
 
 当我们应用一个Monad的执行函数的时候，我们希望它可以反复运行：如果给予相同的函数体（body）和参数，我们每次都能得到相同的结果。这同样可以应用于 ``runST`` 。为了达到这种可重复性（repeatablility），``ST`` monad比 ``IO`` monad更加严格。我们不能读写文件，创建全局变量，或者创建线程。甚至，即使我们可以创建并且使用可变的引用和数组，类型系统也不允许它们逃逸到 ``runST`` 的调用方。在我们能够返回数据之前，一个可变的数组必须被冻结（frozen）为一个不可变的数组，并且一个可变的引用完全不可以逃逸。
 
-设计一个合格的输入API
+设计一个合格的导入API
 ------------------------
 
 我们需要讨论一下用来处理布隆过滤器的公开接口。
@@ -128,6 +128,16 @@ Haskell提供了一个特殊的Monad，叫做 ``ST``  *（State Transformer）* 
   import Prelude hiding (elem, length, notElem)
 
   import BloomFilter.Internal (MutBloom(..))
+
+我们导出的一些API的名字与Prelude中导出的名字冲突。这是值得商榷的：我们希望模块的用户用全名来导入API。这会减少用户的记忆负担，因为他们应该已经熟悉了Prelude的 ``elem`` , ``notElem`` 和 ``length`` 函数。
+
+当我们使用这种风格的模块时，我们可能经常用单个字母前缀来导入它。比如 ``import qualified BloomFilter.Mutable as M`` ，这允许我们写 ``M.length`` 这样的紧凑、可读的代码。
+
+另一种方法是，我们可以不用全名导入模块，并且在导入Prelude时隐藏冲突的API。比如 ``import Prelude hiding (length)`` 。这种方法有时候不是那么好，因为它没有给阅读代码的人暗示他们看到的不是Prelude的 ``length`` 。
+
+当然，我们看起来违反了我们自己的模块头的声明：我们导入了Prelude，并且隐藏了它导出的一些API名字。这是有实际原因的。我们定义了一个叫做 ``length`` 的函数。当我们在不先隐藏Prelude的 ``length`` 的情况下导出我们模块的length的话，编译器会出错。因为他不知道该导出我们定义的 ``length`` 还是Prelude的那个。
+
+虽然有点不太好看，我们也可以导出全名 ``BloomFilter.Mutable.length`` 来消除二义性。当然最终的决定不会对我们模块的用户有影响，只是作为作者，希望把模块设计成黑盒子，所以在这里不用太迷惑。
 
 .. TO BE CONTINUE
 
