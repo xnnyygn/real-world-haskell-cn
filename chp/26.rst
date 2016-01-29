@@ -139,6 +139,78 @@ Haskell提供了一个特殊的Monad，叫做 ``ST``  *（State Transformer）* 
 
 虽然有点不太好看，我们也可以导出全名 ``BloomFilter.Mutable.length`` 来消除二义性。当然最终的决定不会对我们模块的用户有影响，只是作为作者，希望把模块设计成黑盒子，所以在这里不用太迷惑。
 
+创建一个可变的布隆过滤器
+------------------------
+
+我们把可变的布隆过滤器的类型定义放在 ``BloomFilter.Internel`` 模块中，与不可变的 ``Bloom`` 类型一起。
+
+::
+
+  -- file: BloomFilter/Internal.hs
+  data MutBloom s a = MB {
+        mutHash :: (a -> [Word32])
+      , mutArray :: STUArray s Word32 Bool
+      }
+
+``STUArray`` 类型在这里是一个可变的未装箱数组，可以 ``ST`` 来处理。为了创建一个 ``STUArray`` ，我们使用 ``newArray`` 函数。 ``new`` 函数属于 ``BloomFilter.Mutable`` 。
+
+::
+
+  -- file: BloomFilter/Mutable.hs
+  new :: (a -> [Word32]) -> Word32 -> ST s (MutBloom s a)
+  new hash numBits = MB hash `liftM` newArray (0,numBits-1) False
+
+``STUArray`` 的大部分方法实际由 ``MArray`` 实现，``MArray`` 定义在 ``Data.Array.MArray`` 模块中。
+
+我们的 ``length`` 函数在两点上有一点复杂。我们依赖位数组的范围记录，并且 ``MArray`` 实例的 ``getBounds`` 函数有一个独特（？，monadic）类型。同时我们必须在结果上加1，因为数组的上限比它的长度少1。
+
+::
+
+  -- file: BloomFilter/Mutable.hs
+  length :: MutBloom s a -> ST s Word32
+  length filt = (succ . snd) `liftM` getBounds (mutArray filt)
+
+为了往布隆过滤器添加元素，我们按照哈希函数设置所有位。我们使用 ``mod`` 函数保证所有哈希值都在我们的数组范围内，并且把计算位数组偏移的代码隔离到另外一个函数中。
+
+::
+
+  -- file: BloomFilter/Mutable.hs
+  insert :: MutBloom s a -> a -> ST s ()
+  insert filt elt = indices filt elt >>=
+                    mapM_ (\bit -> writeArray (mutArray filt) bit True)
+
+  indices :: MutBloom s a -> a -> ST s [Word32]
+  indices filt elt = do
+    modulus <- length filt
+    return $ map (`mod` modulus) (mutHash filt elt)
+
+测试是否是成员并不复杂，如果哈希函数计算出来的所有位都打开，我们就认为这个元素在布隆过滤器中。
+
+::
+
+  -- file: BloomFilter/Mutable.hs
+  elem, notElem :: a -> MutBloom s a -> ST s Bool
+
+  elem elt filt = indices filt elt >>=
+                  allM (readArray (mutArray filt))
+
+  notElem elt filt = not `liftM` elem elt filt
+
+我们需要一个辅助函数： ``all`` 的monadic版本，叫做 ``allM`` 。
+
+::
+
+  -- file: BloomFilter/Mutable.hs
+  allM :: Monad m => (a -> m Bool) -> [a] -> m Bool
+  allM p (x:xs) = do
+    ok <- p x
+    if ok
+      then allM p xs
+      else return False
+  allM _ [] = return True
+
+
+
 .. TO BE CONTINUE
 
 .. [Broder02] Andrei Broder. Michael Mitzenmacher. “Network applications of Bloom filters: a survey”. Internet Mathematics. 1. 4. 2005. 485-509. A K Peters Ltd..
