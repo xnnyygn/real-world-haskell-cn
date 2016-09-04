@@ -210,7 +210,76 @@ Haskell提供了一个特殊的Monad，叫做 ``ST``  *（State Transformer）* 
   allM _ [] = return True
 
 
+不可变API
+------------------------
 
-.. TO BE CONTINUE
+我们的不可变布隆过滤器的接口与可变布隆过滤器有相同的结构。
+
+::
+
+  -- file: ch26/BloomFilter.hs
+  module BloomFilter
+      (
+        Bloom
+      , length
+      , elem
+      , notElem
+      , fromList
+      ) where
+
+  import BloomFilter.Internal
+  import BloomFilter.Mutable (insert, new)
+  import Data.Array.ST (runSTUArray)
+  import Data.Array.IArray ((!), bounds)
+  import Data.Word (Word32)
+  import Prelude hiding (elem, length, notElem)
+
+  length :: Bloom a -> Int
+  length = fromIntegral . len
+
+  len :: Bloom a -> Word32
+  len = succ . snd . bounds . blmArray
+
+  elem :: a -> Bloom a -> Bool
+  elt `elem` filt   = all test (blmHash filt elt)
+    where test hash = blmArray filt ! (hash `mod` len filt)
+
+  notElem :: a -> Bloom a -> Bool
+  elt `notElem` filt = not (elt `elem` filt)
+
+我们提供了一个易于使用的方法来创建不可变布隆过滤器，``fromList`` 函数。
+这个函数对用户隐藏了 ``ST`` monad，因此用户只能看到不可变类型。
+
+::
+
+  -- file: ch26/BloomFilter.hs
+  fromList :: (a -> [Word32])    -- family of hash functions to use
+           -> Word32             -- number of bits in filter
+           -> [a]                -- values to populate with
+           -> Bloom a
+  fromList hash numBits values =
+      B hash . runSTUArray $
+        do mb <- new hash numBits
+           mapM_ (insert mb) values
+           return (mutArray mb)
+
+这个函数的关键是 ``runSTUArray`` 。我们早先提到为了从 ``ST`` monad中返回一个不可变的数组，我们必须冻结（freeze）一个可变的数组。 ``runSTUArray`` 函数组合了执行和冻结。给定一个返回一个 ``STUArray`` 的操作， ``runST`` 将执行这个操作，冻结操作返回的 ``STUArray`` ，并作为一个 ``UArray`` 返回给用户。
+
+我们也可以使用 ``MArray`` 类型提供了的 ``freeze`` 函数，但是 ``runSTUArray`` 更加方便和高效。 后者的效率基于以下事实， ``freeze`` 函数必须从 ``STUArray`` 复制底层数据到新的 ``UArray``，为了保证对 ``STUArray`` 的后续修改不会影响到 ``UArray`` 的内容。感谢类型系统， ``runSTUArray`` 可以保证当 ``STUArray`` 被用于创建一个 ``UArray`` 时他将不能继续被访问。因此可以在两个数组（ ``STUArray`` 和 ``UArray`` ）之间共享底层数据，避免了复制。
+
+创建一个友好的接口
+------------------------
+
+虽然我们的不可变布隆过滤器可以在创建之后直接使用， ``fromList`` 仍然留下了一些重要问题未解决。我们仍然必须选择一个函数来生成很多哈希值，和决定布隆过滤器的空间大小应该是多少。
+
+::
+
+  -- file: BloomFilter/Easy.hs
+  easyList :: (Hashable a)
+           => Double        -- false positive rate (between 0 and 1)
+           -> [a]           -- values to populate the filter with
+           -> Either String (B.Bloom a)
+
+这里有一个可能的“更加友好”的方式来创建布隆过滤器。它将计算哈希值的职责留给了类型 ``Hashable``。
 
 .. [Broder02] Andrei Broder. Michael Mitzenmacher. “Network applications of Bloom filters: a survey”. Internet Mathematics. 1. 4. 2005. 485-509. A K Peters Ltd..
