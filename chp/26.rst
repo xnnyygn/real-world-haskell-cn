@@ -280,6 +280,28 @@ Haskell提供了一个特殊的Monad，叫做 ``ST``  *（State Transformer）* 
            -> [a]           -- values to populate the filter with
            -> Either String (B.Bloom a)
 
-这里有一个可能的“更加友好”的方式来创建布隆过滤器。它将计算哈希值的职责留给了类型 ``Hashable``。
+这里有一个可能的“更加友好”的方式来创建布隆过滤器。它将计算哈希值的职责留给了类型 ``Hashable``。这允许我们用一个易于理解的参数来配置布隆过滤器，也就是我们愿意容忍的误报率。并且这将帮助我们基于期望的误报率和输入列表中的元素数量来选择过滤器的大小。
+
+当然这个函数不会一直有用：比如，在输入列表过长的时候它将失败。不管怎样，它的简易性实现了我们提供的其他接口。这让我们给用户提供了超过直接创建的控制能力，从完全命令式到完全声明式。
+
+为了方便重新导出名称
+
+在我们模块的到处列表中，我们重新从基础的 ``BloomFilter`` 模块导出了一些名称。这允许那些随便的用户仅导入 ``BloomFilter.Easy`` 模块，并可以访问他们可能需要的所有类型和函数。
+
+如果我们同时导入 ``BloomFilter.Easy`` 和 ``BloomFilter`` ，你可能想知道如果我们尝试使用一个被两者同时导出的名称会发生什么。我们已经知道如果我们没有使用全名来导入 ``BloomFilter`` 并且尝试使用 ``length`` ，GHC将报“不明确”错误，这是因为 ``Prelude`` 中也有 ``length`` 。
+
+Haskell标准中需要一个能够在引用相同“东西”的时候区分的实现。比如， ``Bloom`` 类型被 ``BloomFilter`` 和 ``BloomFilter.Easy`` 导出。如果我们同时导入两个模块并且尝试使用 ``Bloom`` ，GHC能识别出被 ``BloomFilter.Easy`` 重新导出的 ``Bloom`` 和从 ``BloomFilter`` 中导出的是同一个，所以会被报告“不明确”错误。
+
+哈希值
+
+布隆过滤器为了高性能和低误判率依赖快速，高质量的哈希函数。一般很难写出同时满足这些特性的通用哈希函数。
+
+我们很幸运，一个叫做Bob Jenkins的人开发了一些着实有这些特性的函数，并且把他的代码放在了公开域名上， http://burtleburtle.net/bob/hash/doobs.html [59]_ 。他用C写了这些哈希函数，所以我们可以简单地通过FFI创建绑定。从那个网站上我们需要的特定源码文件叫做 ``lookup3.c`` [LOOKUP3_C]_ 。我们创建 ``cbits`` 目录并把文件下载到那里。
+
+
 
 .. [Broder02] Andrei Broder. Michael Mitzenmacher. “Network applications of Bloom filters: a survey”. Internet Mathematics. 1. 4. 2005. 485-509. A K Peters Ltd..
+
+.. [59] Jenkins写的哈希函数有更好的混合特性，相对其他流行的非加密哈希函数，比如FNV和 ``hashpjw`` ，所以我们推荐不要用他们。
+
+.. [LOOKUP3_C] http://burtleburtle.net/bob/c/lookup3.c
