@@ -298,7 +298,95 @@ Haskell标准中需要一个能够在引用相同“东西”的时候区分的�
 
 我们很幸运，一个叫做Bob Jenkins的人开发了一些着实有这些特性的函数，并且把他的代码放在了公开域名上， http://burtleburtle.net/bob/hash/doobs.html [59]_ 。他用C写了这些哈希函数，所以我们可以简单地通过FFI创建绑定。从那个网站上我们需要的特定源码文件叫做 ``lookup3.c`` [LOOKUP3_C]_ 。我们创建 ``cbits`` 目录并把文件下载到那里。
 
+  
+  一些补充
 
+  在你刚下载的 ``lookup3.c`` 拷贝第36行，定义了一个叫做 ``SELF_TEST`` 的宏。为了把这个源码文件用作库，你必须删除这行或者注释掉它。如果你忘记了，靠近文件最下面的 ``main`` 函数将取代你链接的任何Haskell程序的 ``main`` 方法。
+
+还有一个障碍：我们将经常性地需要7到甚至10个哈希函数。我们真得不想一次去除那么多不同的函数。幸运的是，我们不用那么做。在大部分时候，我们只需要两个。之后我们将简短地看到如何这么做。Jenkins的哈希库包含了两个函数， ``hashword2`` 和 ``hashlittle2`` ，用来计算两个哈希值。这里是描述着两个函数API的C头文件。我们将这段保存到 ``cbits/lookup3.h`` 中。
+
+::
+  
+  /* save this file as lookup3.h */
+
+  #ifndef _lookup3_h
+  #define _lookup3_h
+
+  #include <stdint.h>
+  #include <sys/types.h>
+
+  /* only accepts uint32_t aligned arrays of uint32_t */
+  void hashword2(const uint32_t *key,  /* array of uint32_t */
+           size_t length,      /* number of uint32_t values */
+           uint32_t *pc,       /* in: seed1, out: hash1 */
+           uint32_t *pb);      /* in: seed2, out: hash2 */
+
+  /* handles arbitrarily aligned arrays of bytes */
+  void hashlittle2(const void *key,   /* array of bytes */
+       size_t length,     /* number of bytes */
+       uint32_t *pc,      /* in: seed1, out: hash1 */
+       uint32_t *pb);     /* in: seed2, out: hash2 */
+
+  #endif /* _lookup3_h */
+
+“盐值”是一个使函数计算产生不同哈希值的参数。如果我们使用两个不同的盐值来哈希相同的值，我们将得到不同的哈希结果。因为这些函数计算得到两个哈希值，所以我们接受两个盐值。
+
+这是我们对这些函数的Haskell绑定。
+
+::
+
+  -- file: BloomFilter/Hash.hs
+  {-# LANGUAGE BangPatterns, ForeignFunctionInterface #-}
+  module BloomFilter.Hash
+      (
+        Hashable(..)
+      , hash
+      , doubleHash
+      ) where
+
+  import Data.Bits ((.&.), shiftR)
+  import Foreign.Marshal.Array (withArrayLen)
+  import Control.Monad (foldM)
+  import Data.Word (Word32, Word64)
+  import Foreign.C.Types (CSize)
+  import Foreign.Marshal.Utils (with)
+  import Foreign.Ptr (Ptr, castPtr, plusPtr)
+  import Foreign.Storable (Storable, peek, sizeOf)
+  import qualified Data.ByteString as Strict
+  import qualified Data.ByteString.Lazy as Lazy
+  import System.IO.Unsafe (unsafePerformIO)
+
+  foreign import ccall unsafe "lookup3.h hashword2" hashWord2
+      :: Ptr Word32 -> CSize -> Ptr Word32 -> Ptr Word32 -> IO ()
+
+  foreign import ccall unsafe "lookup3.h hashlittle2" hashLittle2
+      :: Ptr a -> CSize -> Ptr Word32 -> Ptr Word32 -> IO ()
+
+我们已经指定了函数定义，来自刚才我们创建的 ``lookup3.h`` 头文件。
+
+为了方便和效率，我们将通过Jenkins的哈希函数组合使用的32位盐值和计算得到的哈希值为单个64位的值。
+
+::
+
+  -- file: BloomFilter/Hash.hs
+  hashIO :: Ptr a    -- value to hash
+         -> CSize    -- number of bytes
+         -> Word64   -- salt
+         -> IO Word64
+  hashIO ptr bytes salt =
+      with (fromIntegral salt) $ \sp -> do
+        let p1 = castPtr sp
+            p2 = castPtr sp `plusPtr` 4
+        go p1 p2
+        peek sp
+    where go p1 p2
+            | bytes .&. 3 == 0 = hashWord2 (castPtr ptr) words p1 p2
+            | otherwise        = hashLittle2 ptr bytes p1 p2
+          words = bytes `div` 4
+
+如何没有确切类似来描述的话，上述的代码明显是不完整的。 ``with`` 函数在C的栈上分配空间，并且把当前的盐值放进去，所以 ``sp`` 类型是 ``Ptr Word64`` 。指针 ``p1`` 和 ``p2`` 类型为 ``Ptr Word32`` ； ``p1`` 指向 ``sp`` 的低字。 ``p2`` 指向 ``sp`` 的高字。这就是我们如何把单个 ``Word64`` 分为两个 ``Ptr Word32`` 参数的方法。
+
+因为我们所有的数据指针都是来自Haskell的堆，所以我们知道这些数据指针将地址对齐，安全传递 ``hashWord2`` (仅接受32位对齐地址)或者 ``hashLittle2`` 。
 
 .. [Broder02] Andrei Broder. Michael Mitzenmacher. “Network applications of Bloom filters: a survey”. Internet Mathematics. 1. 4. 2005. 485-509. A K Peters Ltd..
 
